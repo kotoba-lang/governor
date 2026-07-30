@@ -31,6 +31,39 @@
   actually diverged) and for `langchain-store`'s codec (copied
   complete-identical into 190). A hand-copied invariant is not an invariant.
 
+  ## Two dialects, and why one of them cannot drift
+
+  The fleet writes the verdict two ways, and the split is not arbitrary:
+
+  * **boolean** (346 actors) — `{:ok? :hard? :escalate?}`, three independent
+    flags. This is the dialect that drifted, and it is *able* to drift because
+    nothing in the shape stops two flags from contradicting each other. Use
+    `verdict` + `conformance-failures`.
+  * **enum** (24 actors) — `{:decision :proceed|:hold|:human-approval}`, one
+    value. A verdict cannot say both 「permanently refused」 and 「awaiting
+    sign-off」 because there is only one slot. **The isco-5419 defect is
+    unrepresentable here.** Use `decision`.
+
+  New actors should prefer the enum. `verdict->decision` and
+  `decision->verdict` translate, so a console can consume either.
+
+  ## The missing-confidence default
+
+  Both constructors treat an absent `:confidence` as **0.0**, never 1.0.
+
+  This is worth stating because the fleet does not agree with itself. All 346
+  boolean actors default to 0.0 and one of them tests it explicitly — a
+  proposal with no :confidence key at all is treated as 0.0 confidence, never
+  silently treated as trustworthy. All 24 enum actors default to **1.0** —
+  and `cloud-itonami-isco-4321`'s own advisor docstring says the opposite of
+  what its governor does — its advisor docstring reads: LLM parse failures
+  always yield :confidence 0.0 (never fabricate confidence), which forces the
+  governor to escalate/hold.
+
+  A proposal that does not say how confident it is has not said it is
+  confident. Defaulting to 1.0 means an omission auto-proceeds, which is the
+  one direction a governor must never fail in.
+
   ## What belongs here, and what does not
 
   **Here:** the verdict arithmetic, the routing decision derived from it, the
@@ -195,6 +228,108 @@
   (cond hard? :hold
         escalate? :request-approval
         :else :commit))
+
+;; ---------------------------------------------------------------------------
+;; The enum dialect — one slot, so a contradictory verdict cannot be written
+;; ---------------------------------------------------------------------------
+
+(def decisions
+  "The enum dialect's complete vocabulary.
+
+    :proceed        — commit
+    :human-approval — escalate for sign-off; the operation is legitimate
+    :hold           — refused; no approval path"
+  #{:proceed :human-approval :hold})
+
+(defn decision
+  "Assemble an enum-dialect verdict.
+
+  Same inputs as `verdict`. Returns
+  `{:decision :violations :confidence :reason}` — `:reason` is `nil` on
+  `:proceed`, `:violations` on `:hold`, and `:counsel-decision` /
+  `:low-confidence` on `:human-approval`.
+
+  The precedence is the same and for the same reason: violations first, then
+  the op's own nature, then confidence. What differs is that there is exactly
+  one output slot, so the drift `conformance-failures` exists to catch in the
+  boolean dialect has nowhere to live here."
+  [{:keys [violations confidence escalating-op? confidence-floor extra]}]
+  (let [vs (vec violations)
+        conf (or confidence 0.0)
+        floor (or confidence-floor default-confidence-floor)]
+    (merge
+     (cond
+       (seq vs) {:decision :hold :violations vs :confidence conf :reason :violations}
+       escalating-op? {:decision :human-approval :violations [] :confidence conf
+                       :reason :counsel-decision}
+       (< conf floor) {:decision :human-approval :violations [] :confidence conf
+                       :reason :low-confidence}
+       :else {:decision :proceed :violations [] :confidence conf :reason nil})
+     extra)))
+
+(defn verdict->decision
+  "Boolean dialect -> enum. Uses `disposition`, so a malformed verdict still
+  fails closed."
+  [{:keys [violations confidence escalation-reason] :as v}]
+  (let [d (case (disposition v)
+            :hold :hold
+            :request-approval :human-approval
+            :commit :proceed)]
+    {:decision d
+     :violations (vec violations)
+     :confidence confidence
+     :reason (case d
+               :hold :violations
+               :human-approval escalation-reason
+               nil)}))
+
+(defn decision->verdict
+  "Enum -> boolean dialect, for a consumer that only speaks the flags."
+  [{:keys [decision violations confidence reason]}]
+  {:ok? (= :proceed decision)
+   :violations (vec violations)
+   :confidence confidence
+   :hard? (= :hold decision)
+   :escalate? (= :human-approval decision)
+   :escalation-reason (when (= :human-approval decision) reason)})
+
+(defn decision-conformance-failures
+  "Every way `d` is not a well-formed enum verdict."
+  [{:keys [decision violations confidence reason] :as d}]
+  (cond-> []
+    (not (map? d))
+    (conj {:check :shape :detail "decision is not a map"})
+
+    (not (contains? decisions decision))
+    (conj {:check :unknown-decision
+           :detail (str "decision " (pr-str decision) " が語彙 " (pr-str decisions) " に無い")})
+
+    (and (= :hold decision) (empty? violations))
+    (conj {:check :hold-without-violations
+           :detail "hold なのに violations が空 — 何を拒否したか示せない"})
+
+    (and (not= :hold decision) (seq violations))
+    (conj {:check :violations-without-hold
+           :detail "violations があるのに hold でない"})
+
+    (and (= :human-approval decision) (nil? reason))
+    (conj {:check :approval-without-reason
+           :detail "human-approval なのに reason が無い（承認者に理由を示せない）"})
+
+    (and (= :proceed decision) (some? reason))
+    (conj {:check :reason-on-proceed :detail "proceed なのに reason がある"})
+
+    (not (number? confidence))
+    (conj {:check :confidence-missing :detail "confidence が数値でない"})
+
+    (some #(not (:rule %)) (or violations []))
+    (conj {:check :violation-without-rule
+           :detail "rule キーワードの無い violation がある"})))
+
+(defn decision-conformant?
+  "True when `d` is a well-formed enum verdict."
+  [d]
+  (empty? (decision-conformance-failures d)))
 
 ;; ---------------------------------------------------------------------------
 ;; Conformance — call this from your actor's test suite

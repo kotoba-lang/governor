@@ -220,3 +220,70 @@
         (is (= :hold (gov/disposition v)))
         (is (false? (:escalate? v)))
         (is (gov/conformant? v))))))
+
+;; ---------------------------------------------------------------------------
+;; The enum dialect
+;; ---------------------------------------------------------------------------
+
+(deftest enum-dialect-basics
+  (is (= :proceed (:decision (gov/decision {:violations [] :confidence 0.9}))))
+  (is (= :hold (:decision (gov/decision {:violations [{:rule :x}] :confidence 0.9}))))
+  (is (= :human-approval (:decision (gov/decision {:violations [] :confidence 1.0
+                                                   :escalating-op? true}))))
+  (is (= :human-approval (:decision (gov/decision {:violations [] :confidence 0.3}))))
+  (testing "reasons"
+    (is (nil? (:reason (gov/decision {:violations [] :confidence 0.9}))))
+    (is (= :violations (:reason (gov/decision {:violations [{:rule :x}] :confidence 0.9}))))
+    (is (= :counsel-decision (:reason (gov/decision {:violations [] :confidence 1.0
+                                                     :escalating-op? true}))))
+    (is (= :low-confidence (:reason (gov/decision {:violations [] :confidence 0.3}))))))
+
+(deftest the-drift-is-unrepresentable-in-the-enum
+  (testing "there is one slot, so 'refused' and 'awaiting sign-off' cannot both be said"
+    (doseq [conf [0.0 0.5 1.0] risky? [true false]]
+      (let [d (gov/decision {:violations [{:rule :x}] :confidence conf
+                             :escalating-op? risky?})]
+        (is (= :hold (:decision d)))
+        (is (gov/decision-conformant? d))
+        (testing "and translating to the boolean dialect keeps it a hold"
+          (let [v (gov/decision->verdict d)]
+            (is (true? (:hard? v)))
+            (is (false? (:escalate? v)))
+            (is (empty? (gov/conformance-failures v)))))))))
+
+(deftest missing-confidence-is-not-confidence
+  (testing "0.0, never 1.0 — the 24 enum actors in the fleet have this backwards"
+    (is (= 0.0 (:confidence (gov/decision {:violations []}))))
+    (is (= :human-approval (:decision (gov/decision {:violations []})))
+        "an omission must not auto-proceed")
+    (is (= 0.0 (:confidence (gov/verdict {:violations []}))))
+    (is (true? (:escalate? (gov/verdict {:violations []}))))))
+
+(deftest dialects-round-trip
+  (doseq [inputs [{:violations [] :confidence 0.9}
+                  {:violations [] :confidence 0.2}
+                  {:violations [] :confidence 1.0 :escalating-op? true}
+                  {:violations [{:rule :x}] :confidence 0.9}]]
+    (let [v (gov/verdict inputs)
+          d (gov/decision inputs)]
+      (testing (pr-str inputs)
+        (is (= (:decision d) (:decision (gov/verdict->decision v))))
+        (is (= (select-keys v [:ok? :hard? :escalate?])
+               (select-keys (gov/decision->verdict d) [:ok? :hard? :escalate?])))
+        (is (gov/decision-conformant? d))
+        (is (gov/conformant? v))))))
+
+(deftest enum-conformance-catches-malformation
+  (letfn [(checks [d] (set (map :check (gov/decision-conformance-failures d))))]
+    (is (contains? (checks {:decision :maybe :confidence 0.9}) :unknown-decision))
+    (is (contains? (checks {:decision :hold :violations [] :confidence 0.9})
+                   :hold-without-violations))
+    (is (contains? (checks {:decision :proceed :violations [{:rule :x}] :confidence 0.9})
+                   :violations-without-hold))
+    (is (contains? (checks {:decision :human-approval :violations [] :confidence 0.9})
+                   :approval-without-reason))
+    (is (contains? (checks {:decision :proceed :violations [] :confidence 0.9
+                            :reason :low-confidence})
+                   :reason-on-proceed))
+    (is (contains? (checks {:decision :proceed :violations []}) :confidence-missing))
+    (is (contains? (checks "nope") :shape))))

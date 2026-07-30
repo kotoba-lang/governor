@@ -2,7 +2,7 @@
 
 The itonami actor pattern's governor layer, written once.
 
-**Maturity: `:implemented`.** 15 tests / 104 assertions green (`clojure -M:test`),
+**Maturity: `:implemented`.** 20 tests / 169 assertions green (`clojure -M:test`),
 `clojure -M:lint` warnings 0, zero dependencies.
 
 ```clojure
@@ -61,6 +61,39 @@ A hand-copied invariant is not an invariant.
 
 ---
 
+## Two dialects, and why one cannot drift
+
+The fleet writes the verdict two ways, and the split is not arbitrary:
+
+| dialect | actors | shape | can it drift? |
+|---|---|---|---|
+| boolean | 346 | `{:ok? :hard? :escalate?}` — three independent flags | **yes** — nothing stops two flags from contradicting each other; this is where isco-5419 broke |
+| enum | 24 | `{:decision :proceed \| :human-approval \| :hold}` — one value | **no** — a verdict cannot say both "permanently refused" and "awaiting sign-off" because there is only one slot |
+
+**New actors should prefer the enum.** Existing boolean actors get the same
+guarantee from `conformance-failures`, which is the one-line adoption above.
+
+## The missing-confidence default
+
+Both constructors treat an absent `:confidence` as **0.0**, never 1.0 — and the
+fleet does not currently agree with itself about this:
+
+- all **346** boolean actors default to `0.0`, and isco-5419 tests it: *"A
+  proposal with no `:confidence` key at all is treated as 0.0 confidence, never
+  silently treated as trustworthy"*;
+- all **24** enum actors default to `1.0`, and `cloud-itonami-isco-4321`'s own
+  advisor docstring contradicts its governor: *"LLM parse failures always yield
+  `:confidence 0.0` (never fabricate confidence), which forces the governor to
+  escalate/hold"*.
+
+A proposal that does not say how confident it is has not said it is confident.
+Defaulting to `1.0` means an omission auto-proceeds — the one direction a
+governor must never fail in. Measured 2026-07-30: no test in any of the 24
+exercises the default, and in the 4 that have an advisor the advisor always sets
+`:confidence` explicitly, so it is a latent hazard rather than a live defect.
+
+---
+
 ## What belongs here, and what does not
 
 **Here** — the parts that are genuinely identical everywhere:
@@ -68,6 +101,9 @@ A hand-copied invariant is not an invariant.
 | fn | what it is |
 |---|---|
 | `verdict` | the five-line assembly: `{:ok? :violations :confidence :hard? :escalate? :escalation-reason}` |
+| `decision` | the **enum** dialect: `{:decision :proceed \| :human-approval \| :hold}` — one slot, so the drift above is unrepresentable |
+| `verdict->decision` / `decision->verdict` | translate, so a console consumes either |
+| `decision-conformance-failures` / `decision-conformant?` | the enum's own well-formedness check |
 | `disposition` | the conditional edge out of `:govern` → `:hold` \| `:request-approval` \| `:commit` |
 | `no-actuation` | `:effect` must be `:propose` |
 | `missing-subject` | the requesting party must be registered |
