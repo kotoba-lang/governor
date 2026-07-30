@@ -2,7 +2,7 @@
 
 The itonami actor pattern's governor layer, written once.
 
-**Maturity: `:implemented`.** 20 tests / 169 assertions green (`clojure -M:test`),
+**Maturity: `:implemented`.** 24 tests / 203 assertions green (`clojure -M:test`),
 `clojure -M:lint` warnings 0, zero dependencies.
 
 ```clojure
@@ -61,17 +61,42 @@ A hand-copied invariant is not an invariant.
 
 ---
 
-## Two dialects, and why one cannot drift
+## Four dialects, surveyed
 
-The fleet writes the verdict two ways, and the split is not arbitrary:
+Every one of the 376 is accounted for (2026-07-30):
 
 | dialect | actors | shape | can it drift? |
 |---|---|---|---|
-| boolean | 346 | `{:ok? :hard? :escalate?}` — three independent flags | **yes** — nothing stops two flags from contradicting each other; this is where isco-5419 broke |
-| enum | 24 | `{:decision :proceed \| :human-approval \| :hold}` — one value | **no** — a verdict cannot say both "permanently refused" and "awaiting sign-off" because there is only one slot |
+| boolean | 345 | `{:ok? :hard? :escalate?}` — three independent flags | **yes** — nothing stops two flags from contradicting each other; this is where isco-5419 broke |
+| enum | 24 | `{:decision :proceed \| :human-approval \| :hold}` — one value | no — one slot |
+| flag-enum | 1 (`network-awai/cloud-itonami`) | one flag value compared with `eq-flag` | no — same property; not served by this library and does not need to be |
+| publication | 6 | `{:ok? :violations :warnings}` — binary, **no escalation at all** | no — nothing to contradict |
 
-**New actors should prefer the enum.** Existing boolean actors get the same
-guarantee from `conformance-failures`, which is the one-line adoption above.
+**New actors that gate an operation should prefer the enum.** Existing boolean
+actors get the same guarantee from `conformance-failures`, the one-line
+adoption below.
+
+### The publication dialect is not a missing escalation
+
+`animeka-actor`, `dougaka-actor`, `kouhou`, `tashikame`,
+`com-etzhayyim-minidrama`, `com-etzhayyim-tomoshibi`. These six publish speech,
+and their own source says why a per-post human approval step is refused —
+`tashikame.phase` calls it *per-post prior restraint*, and `tomoshibi.governor`
+states the governor *"is NOT an external operator/Council prior restraint — it
+is tomoshibi's OWN seed rail (the off-switch is the revocable member CACAO
+leash, not a per-post approval)"*. Publication is autonomous by default
+(ADR-2606281500); the control is revoking the publishing capability once, not a
+human clearing each post.
+
+The shape follows: HARD violation → hold and never publish; everything else →
+publish. Low confidence is a `:warnings` entry that becomes a **transparency
+tag on the published item**, not a gate — which is why five of the six set
+`confidence-floor` to `0.4`, and why `tomoshibi` carries no confidence at all.
+
+`publication-conformance-failures` therefore treats the **presence** of
+`:escalate?` / `:decision` / `:hard?` as the error. An audit that mechanically
+repaired these toward the boolean dialect would be adding prior restraint to a
+speech actor.
 
 ## The missing-confidence default
 
@@ -104,6 +129,8 @@ exercises the default, and in the 4 that have an advisor the advisor always sets
 | `decision` | the **enum** dialect: `{:decision :proceed \| :human-approval \| :hold}` — one slot, so the drift above is unrepresentable |
 | `verdict->decision` / `decision->verdict` | translate, so a console consumes either |
 | `decision-conformance-failures` / `decision-conformant?` | the enum's own well-formedness check |
+| `publication-verdict` / `publication-disposition` | the **publication** dialect: binary, no escalation by doctrine |
+| `publication-conformance-failures` / `publication-conformant?` | rejects an escalation key smuggled onto a publication verdict |
 | `disposition` | the conditional edge out of `:govern` → `:hold` \| `:request-approval` \| `:commit` |
 | `no-actuation` | `:effect` must be `:propose` |
 | `missing-subject` | the requesting party must be registered |

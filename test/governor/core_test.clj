@@ -287,3 +287,70 @@
                    :reason-on-proceed))
     (is (contains? (checks {:decision :proceed :violations []}) :confidence-missing))
     (is (contains? (checks "nope") :shape))))
+
+;; ---------------------------------------------------------------------------
+;; The publication dialect — binary by doctrine, not by omission
+;; ---------------------------------------------------------------------------
+
+(deftest publication-is-binary
+  (let [clean (gov/publication-verdict {:violations [] :confidence 0.9})]
+    (is (true? (:ok? clean)))
+    (is (= :commit (gov/publication-disposition clean)))
+    (is (empty? (:warnings clean))))
+  (let [held (gov/publication-verdict {:violations [{:rule :uncited}] :confidence 0.9})]
+    (is (false? (:ok? held)))
+    (is (= :hold (gov/publication-disposition held))))
+  (testing "there is no third disposition and no escalation key"
+    (doseq [v [(gov/publication-verdict {:violations [] :confidence 0.1})
+               (gov/publication-verdict {:violations [{:rule :x}] :confidence 0.1})]]
+      (is (not (contains? v :escalate?)))
+      (is (not (contains? v :decision)))
+      (is (not (contains? v :hard?)))
+      (is (contains? #{:commit :hold} (gov/publication-disposition v))))))
+
+(deftest low-confidence-discloses-rather-than-blocks
+  (testing "below the floor the item still publishes, carrying a transparency warning"
+    (let [v (gov/publication-verdict {:violations [] :confidence 0.2})]
+      (is (true? (:ok? v)) "低確信度は公開を止めない")
+      (is (= :commit (gov/publication-disposition v)))
+      (is (= [:low-confidence] (mapv :rule (:warnings v))))))
+  (testing "at or above the floor there is no warning"
+    (is (empty? (:warnings (gov/publication-verdict {:violations [] :confidence 0.4})))))
+  (testing "an actor that does not model confidence gets no warning (tomoshibi)"
+    (let [v (gov/publication-verdict {:violations [] :confidence nil})]
+      (is (empty? (:warnings v)))
+      (is (true? (:ok? v)))))
+  (is (= 0.4 gov/publication-confidence-floor)))
+
+(deftest publication-conformance-rejects-added-prior-restraint
+  (letfn [(checks [v] (set (map :check (gov/publication-conformance-failures v))))]
+    (is (gov/publication-conformant? (gov/publication-verdict {:violations [] :confidence 0.9})))
+    (is (gov/publication-conformant?
+         (gov/publication-verdict {:violations [{:rule :x}] :confidence 0.9})))
+    (testing "an escalation key smuggled onto a publication verdict IS the error"
+      (doseq [k [:escalate? :decision :hard?]]
+        (is (contains? (checks (assoc (gov/publication-verdict {:violations [] :confidence 0.9})
+                                      k true))
+                       :escalation-added-to-publication)
+            (str k " — 投稿ごとの人的承認は事前抑制"))))
+    (testing "ok? must track violations"
+      (is (contains? (checks {:ok? true :violations [{:rule :x}] :warnings []})
+                     :ok-tracks-violations))
+      (is (contains? (checks {:ok? false :violations [] :warnings []})
+                     :ok-tracks-violations)))
+    (is (contains? (checks {:ok? true :violations [] :warnings [{:detail "no rule"}]})
+                   :warning-without-rule))
+    (is (contains? (checks "nope") :shape))))
+
+(deftest the-three-dialects-stay-distinct
+  (testing "each conformance check accepts only its own dialect's shape"
+    (let [b (gov/verdict {:violations [] :confidence 0.9})
+          e (gov/decision {:violations [] :confidence 0.9})
+          p (gov/publication-verdict {:violations [] :confidence 0.9})]
+      (is (gov/conformant? b))
+      (is (gov/decision-conformant? e))
+      (is (gov/publication-conformant? p))
+      (testing "a boolean verdict is not a valid publication verdict — it carries escalation"
+        (is (not (gov/publication-conformant? b))))
+      (testing "a publication verdict is not a valid enum verdict — it has no :decision"
+        (is (not (gov/decision-conformant? p)))))))

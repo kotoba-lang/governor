@@ -31,21 +31,48 @@
   actually diverged) and for `langchain-store`'s codec (copied
   complete-identical into 190). A hand-copied invariant is not an invariant.
 
-  ## Two dialects, and why one of them cannot drift
+  ## Four dialects. Three cannot drift, and one has no escalation on purpose
 
-  The fleet writes the verdict two ways, and the split is not arbitrary:
+  Surveyed 2026-07-30; every one of the 376 is accounted for:
 
-  * **boolean** (346 actors) — `{:ok? :hard? :escalate?}`, three independent
-    flags. This is the dialect that drifted, and it is *able* to drift because
-    nothing in the shape stops two flags from contradicting each other. Use
-    `verdict` + `conformance-failures`.
-  * **enum** (24 actors) — `{:decision :proceed|:hold|:human-approval}`, one
-    value. A verdict cannot say both 「permanently refused」 and 「awaiting
-    sign-off」 because there is only one slot. **The isco-5419 defect is
-    unrepresentable here.** Use `decision`.
+  * **boolean** (345) — `{:ok? :hard? :escalate?}`, three independent flags.
+    The only dialect that *can* drift, because nothing in the shape stops two
+    flags from contradicting each other, and the only one that *did*
+    (isco-5419). Use `verdict` + `conformance-failures`.
+  * **enum** (24) — `{:decision :proceed|:hold|:human-approval}`, one value.
+    A verdict cannot say both 「permanently refused」 and 「awaiting sign-off」
+    because there is only one slot. Use `decision`.
+  * **flag-enum** (1, `network-awai/cloud-itonami`) — a kernel where the
+    disposition is one flag value compared with `eq-flag`. Same property as
+    the enum; not served by this library and does not need to be.
+  * **publication** (6 — `animeka-actor`, `dougaka-actor`, `kouhou`,
+    `tashikame`, `com-etzhayyim-minidrama`, `com-etzhayyim-tomoshibi`) —
+    `{:ok? :violations :warnings}`, binary, **and deliberately no escalation
+    path at all**. Use `publication-verdict`.
 
-  New actors should prefer the enum. `verdict->decision` and
-  `decision->verdict` translate, so a console can consume either.
+  New actors that gate an *operation* should prefer the enum.
+  `verdict->decision` and `decision->verdict` translate, so a console can
+  consume either.
+
+  ### The publication dialect is not a missing escalation. Do not repair it.
+
+  These six publish speech, and their own source says why a per-post human
+  approval step is refused: `tashikame.phase` calls it 「per-post prior
+  restraint」, and `tomoshibi.governor` states the governor 「is NOT an
+  external operator/Council prior restraint — it is tomoshibi's OWN seed rail
+  (the off-switch is the revocable member CACAO leash, not a per-post
+  approval)」. Publication is autonomous by default (ADR-2606281500); the
+  control is revoking the publishing capability once, not a human clearing
+  each post.
+
+  The shape follows from that: HARD violation → hold and never publish;
+  everything else → publish. Low confidence is a **`:warnings` entry that
+  becomes a transparency tag on the published item**, not a gate — which is
+  also why five of the six set `confidence-floor` to 0.4 rather than 0.6, and
+  why `tomoshibi` carries no confidence at all (it gates on `:gate-result`).
+  None of that is drift. An audit that mechanically repaired these toward the
+  boolean dialect would be adding prior restraint to a speech actor, which is
+  the failure this note exists to prevent.
 
   ## The missing-confidence default
 
@@ -296,10 +323,9 @@
 (defn decision-conformance-failures
   "Every way `d` is not a well-formed enum verdict."
   [{:keys [decision violations confidence reason] :as d}]
-  (cond-> []
-    (not (map? d))
-    (conj {:check :shape :detail "decision is not a map"})
-
+  (if-not (map? d)
+    [{:check :shape :detail "decision is not a map"}]
+    (cond-> []
     (not (contains? decisions decision))
     (conj {:check :unknown-decision
            :detail (str "decision " (pr-str decision) " が語彙 " (pr-str decisions) " に無い")})
@@ -324,12 +350,87 @@
 
     (some #(not (:rule %)) (or violations []))
     (conj {:check :violation-without-rule
-           :detail "rule キーワードの無い violation がある"})))
+           :detail "rule キーワードの無い violation がある"}))))
 
 (defn decision-conformant?
   "True when `d` is a well-formed enum verdict."
   [d]
   (empty? (decision-conformance-failures d)))
+
+;; ---------------------------------------------------------------------------
+;; The publication dialect — binary by doctrine (see the ns docstring)
+;; ---------------------------------------------------------------------------
+
+(def publication-confidence-floor
+  "Lower than `default-confidence-floor` because crossing it here does not
+  block anything — it attaches a transparency warning to something that
+  publishes either way. Five of the six actors use 0.4."
+  0.4)
+
+(defn publication-verdict
+  "Assemble a publication-dialect verdict:
+  `{:ok? :violations :warnings :confidence}`.
+
+  `:violations` are HARD and mean **hold, never publish**. `:warnings` are
+  soft and travel with the published item as disclosure. There is no
+  escalation key, on purpose — see the ns docstring. `:confidence` may be
+  `nil` for an actor that does not model confidence (`tomoshibi`), and then no
+  low-confidence warning is added.
+
+  `:low-confidence-warning` (default true) appends the soft warning the fleet
+  already emits when confidence is below `:confidence-floor`."
+  [{:keys [violations warnings confidence confidence-floor low-confidence-warning extra]
+    :or {low-confidence-warning true}}]
+  (let [vs (vec violations)
+        floor (or confidence-floor publication-confidence-floor)
+        low? (and low-confidence-warning (number? confidence) (< confidence floor))
+        ws (cond-> (vec warnings)
+             low? (conj {:rule :low-confidence
+                         :detail (str "confidence " confidence " < floor " floor)}))]
+    (merge {:ok? (empty? vs)
+            :violations vs
+            :warnings ws
+            :confidence confidence}
+           extra)))
+
+(defn publication-disposition
+  "`:hold` | `:commit`. There is no third value in this dialect."
+  [{:keys [ok?]}]
+  (if ok? :commit :hold))
+
+(defn publication-conformance-failures
+  "Every way `v` is not a well-formed publication verdict.
+
+  Note what is *not* checked: the absence of `:escalate?` / `:decision` is
+  correct here, and their **presence** is the error — a publication actor that
+  grew an escalation key has quietly acquired the per-post prior restraint its
+  doctrine refuses."
+  [{:keys [ok? violations warnings] :as v}]
+  (if-not (map? v)
+    [{:check :shape :detail "publication verdict is not a map"}]
+    (cond-> []
+    (not= (boolean ok?) (empty? violations))
+    (conj {:check :ok-tracks-violations
+           :detail "ok? は violations が空であることと一致しなければならない"})
+
+    (some #(not (:rule %)) (or violations []))
+    (conj {:check :violation-without-rule
+           :detail "rule キーワードの無い violation がある"})
+
+    (some #(not (:rule %)) (or warnings []))
+    (conj {:check :warning-without-rule
+           :detail "rule キーワードの無い warning がある"})
+
+    (or (contains? v :escalate?) (contains? v :decision) (contains? v :hard?))
+    (conj {:check :escalation-added-to-publication
+           :detail (str "publication verdict に escalation キーが付いている — "
+                        "投稿ごとの人的承認は事前抑制にあたるため、この方言には"
+                        "承認経路が無いのが正しい（ns docstring 参照）")}))))
+
+(defn publication-conformant?
+  "True when `v` is a well-formed publication verdict."
+  [v]
+  (empty? (publication-conformance-failures v)))
 
 ;; ---------------------------------------------------------------------------
 ;; Conformance — call this from your actor's test suite
@@ -347,10 +448,12 @@
   (is (empty? (gov/conformance-failures (governor/check req ctx proposal store))))
   ```"
   [{:keys [ok? hard? escalate? escalation-reason violations confidence] :as v}]
-  (cond-> []
-    (not (map? v))
-    (conj {:check :shape :detail "verdict is not a map"})
-
+  (if-not (map? v)
+    ;; Short-circuit: `cond->` evaluates every test form regardless of the
+    ;; earlier ones, so a non-map would reach `contains?`/`some` below and
+    ;; throw instead of being reported.
+    [{:check :shape :detail "verdict is not a map"}]
+    (cond-> []
     (and hard? escalate?)
     (conj {:check :hard-is-not-escalatable
            :detail "hard? と escalate? が同時に true — HARD hold は人が承認できるものではない"})
@@ -384,7 +487,7 @@
 
     (some #(not (:rule %)) (or violations []))
     (conj {:check :violation-without-rule
-           :detail "rule キーワードの無い violation がある（消費側が分岐できない）"})))
+           :detail "rule キーワードの無い violation がある（消費側が分岐できない）"}))))
 
 (defn conformant?
   "True when `v` is a well-formed verdict."
