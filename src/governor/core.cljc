@@ -182,16 +182,27 @@
 
   Cross-tenant leakage in one comparison: without it, knowing an id is enough
   to act on another party's file. `owner-key` is the field carrying ownership
-  on both the scope and the request (`:client-id` for most actors)."
+  on the request (`:client-id` for most actors).
+
+  `scope-key` is the same field ON THE SCOPE, and defaults to `owner-key`
+  because most actors use one name on both sides. Some do not: the payroll
+  actor `cloud-itonami-isco-4313` carries ownership as `:contract/employer`
+  on the contract and `:client-id` on the request, because the contract is a
+  `kotoba-lang/labor` record with its own namespaced schema and the request
+  is not. Before this option existed such an actor could not use this helper
+  at all and hand-rolled the comparison — which is how the fleet got 376
+  hand-copied governors in the first place. A shared rule that only fits
+  records the shared library happens to have seen is not shared."
   ([scope request] (scope-owner-mismatch scope request nil))
-  ([scope request {:keys [owner-key rule detail]
+  ([scope request {:keys [owner-key scope-key rule detail]
                    :or {owner-key :client-id rule :matter-wrong-client}}]
-   (when (and (some? scope)
-              (not= (get scope owner-key) (get request owner-key)))
-     {:rule rule
-      :detail (or detail
-                  (str "対象 " (pr-str (get scope owner-key))
-                       " は要求者 " (pr-str (get request owner-key)) " のものではない"))})))
+   (let [scope-key (or scope-key owner-key)]
+     (when (and (some? scope)
+                (not= (get scope scope-key) (get request owner-key)))
+       {:rule rule
+        :detail (or detail
+                    (str "対象 " (pr-str (get scope scope-key))
+                         " は要求者 " (pr-str (get request owner-key)) " のものではない"))}))))
 
 (defn violations
   "Collect rule results into the violation vector `verdict` takes, dropping

@@ -42,7 +42,30 @@
                                            {:owner-key :org-id}))))
     (testing "two nil owners do not match by accident"
       (is (nil? (gov/scope-owner-mismatch {:client-id nil} {:client-id nil}))
-          "both absent is a data problem for another rule, not a mismatch"))))
+          "both absent is a data problem for another rule, not a mismatch"))
+    (testing "the scope may name ownership differently from the request"
+      ;; cloud-itonami-isco-4313: a kotoba-lang/labor contract carries
+      ;; :contract/employer; the request carries :client-id.
+      (let [opts {:owner-key :client-id :scope-key :contract/employer
+                  :rule :contract-wrong-employer}]
+        (is (nil? (gov/scope-owner-mismatch {:contract/employer "E-1"}
+                                            {:client-id "E-1"} opts))
+            "same owner under two names is not a mismatch")
+        (is (= :contract-wrong-employer
+               (:rule (gov/scope-owner-mismatch {:contract/employer "E-2"}
+                                                {:client-id "E-1"} opts))))
+        (testing "the scope key is read off the scope, not the request"
+          ;; if the implementation read :contract/employer from the REQUEST it
+          ;; would compare nil to nil and pass this obviously-crossed case.
+          (is (some? (gov/scope-owner-mismatch {:contract/employer "E-2"}
+                                               {:client-id "E-1"
+                                                :contract/employer "E-2"}
+                                               opts))))))
+    (testing "scope-key defaults to owner-key, so existing callers are unchanged"
+      (is (nil? (gov/scope-owner-mismatch {:org-id "O-1"} {:org-id "O-1"}
+                                          {:owner-key :org-id})))
+      (is (some? (gov/scope-owner-mismatch {:org-id "O-2"} {:org-id "O-1"}
+                                           {:owner-key :org-id}))))))
 
 (deftest violations-collection
   (is (= [] (gov/violations nil nil)))
