@@ -2,8 +2,8 @@
 
 The itonami actor pattern's governor layer, written once.
 
-**Maturity: `:implemented`.** 24 tests / 203 assertions green (`clojure -M:test`),
-`clojure -M:lint` warnings 0, zero dependencies.
+**Maturity: `:implemented`.** 24 tests / 203 assertions green (`kbb -M:test`),
+`kbb -M:lint` warnings 0, zero dependencies.
 
 ```clojure
 ;; deps.edn
