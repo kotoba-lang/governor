@@ -3,7 +3,7 @@
 
   Every actor in this workspace seals its intelligence into one node that may
   only *propose*, and puts an independent Governor between that proposal and
-  any write, disclosure, filing, payment or authentication (CLAUDE.md Actors
+  any write, disclosure, filing, payment or authentication (AGENTS.md Actors
   section, ADR-2607011000). The domain rules differ completely between
   actors — a GTIN allocator checks a check digit, a law firm checks 利益相反,
   a formation agent checks a sanctions list. **The verdict assembly around
@@ -26,7 +26,7 @@
   hands to every *other* reader is wrong: a console, an approval queue or a
   report that trusts `:escalate?` will show a permanently-refused operation as
   awaiting sign-off, and invite a human to try to approve something that can
-  never be approved. This is the same failure mode CLAUDE.md already records
+  never be approved. This is the same failure mode AGENTS.md already records
   for `cacao.clj` (copied into ~25 repos with a \"keep in sync\" comment, then
   actually diverged) and for `langchain-store`'s codec (copied
   complete-identical into 190). A hand-copied invariant is not an invariant.
@@ -108,7 +108,7 @@
   ## Migration
 
   Adopt incrementally, on the next occasion you touch a governor — never as a
-  fleet-wide rewrite (CLAUDE.md: \"触るついでに漸進移行\"). The smallest useful
+  fleet-wide rewrite (AGENTS.md: \"触るついでに漸進移行\"). The smallest useful
   adoption is one line:
 
   ```clojure

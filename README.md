@@ -18,7 +18,7 @@ io.github.kotoba-lang/governor
 
 Every actor in this workspace seals its intelligence into one node that may only
 *propose*, and puts an independent Governor between that proposal and any write,
-disclosure, filing, payment or authentication (CLAUDE.md Actors section,
+disclosure, filing, payment or authentication (AGENTS.md Actors section,
 ADR-2607011000).
 
 The domain rules differ completely between actors — a GTIN allocator checks a
@@ -51,7 +51,7 @@ This is the third instance of the same failure mode this workspace has recorded:
 
 - `cacao.clj`, copied into ~25 repos with a "keep in sync" comment, then
   **actually diverged** (`denrei` uses shared `ed25519.core` and multi-cap
-  grants; `gijiroku` hand-rolls JDK Ed25519 and has no multi-cap) — CLAUDE.md,
+  grants; `gijiroku` hand-rolls JDK Ed25519 and has no multi-cap) — AGENTS.md,
   ADR-2607268000.
 - `langchain-store`'s `enc`/`dec` codec, copied complete-identical into 190 —
   ADR-2607141600.
@@ -151,7 +151,7 @@ has no dependencies.
 ## Adoption
 
 Incrementally, on the next occasion you touch a governor — **never as a
-fleet-wide rewrite** (CLAUDE.md: 「触るついでに漸進移行」). Three sizes:
+fleet-wide rewrite** (AGENTS.md: 「触るついでに漸進移行」). Three sizes:
 
 ### 1. One line — the verdict
 
